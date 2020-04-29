@@ -45,7 +45,10 @@ from torch import nn
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 from pytorch_pretrained_bert.optimization import BertAdam
 #important
-from modeling_readmission import BertForSequenceClassification
+
+#from modeling_readmission import BertForSequenceClassification
+from pytorch_pretrained_bert import BertForSequenceClassification
+#from modeling_readmission import BertForSequenceClassification
 
 logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s', 
                     datefmt = '%m/%d/%Y %H:%M:%S',
@@ -318,7 +321,7 @@ def vote_score(df, score, args):
 
 def pr_curve_plot(y, y_score, args):
     precision, recall, _ = precision_recall_curve(y, y_score)
-    area = auc(recall,precision)
+    area = auc(recall, precision)
     step_kwargs = ({'step': 'post'}
                    if 'step' in signature(plt.fill_between).parameters
                    else {})
@@ -359,7 +362,7 @@ def vote_pr_curve(df, score, args):
         print('Test Sample too small or RP80=0')
     else:
         rp80 = temp.iloc[0].recall
-        print('Recall at Precision of 80 is {}', rp80)
+        print(f'Recall at Precision of 80 is {rp80}')
 
     return rp80
 
@@ -510,7 +513,7 @@ def main():
             len(train_examples) / args.train_batch_size / args.gradient_accumulation_steps * args.num_train_epochs)
 
     # Prepare model
-    model = BertForSequenceClassification.from_pretrained(args.bert_model, 1)
+    model = BertForSequenceClassification.from_pretrained(args.bert_model, num_labels=1)
     if args.fp16:
         model.half()
     model.to(device)
@@ -541,7 +544,7 @@ def main():
                              t_total=num_train_steps)
 
     global_step = 0
-    train_loss=100000
+    train_loss = 100000
     number_training_steps=1
     global_step_check=0
     train_loss_history=[]
@@ -604,19 +607,21 @@ def main():
                     global_step += 1
                 
                 if (step+1) % 200 == 0:
-                    string = 'step '+str(step+1)
-                    print (string)
+                    if step+1 == 200:
+                        print()
+                    logger.info(f'step {step+1}')
 
             train_loss=tr_loss
             global_step_check=global_step
             number_training_steps=nb_tr_steps
             
-        string = './pytorch_model_new_'+args.readmission_mode+'.bin'
-        torch.save(model.state_dict(), string)
+        fname = 'pytorch_model.bin'
+        torch.save(model.state_dict(), os.path.join(args.output_dir, fname))
 
         fig1 = plt.figure()
         plt.plot(train_loss_history)
-        fig1.savefig('loss_history.png', dpi=fig1.dpi)
+        fname = 'loss_history.png'
+        fig1.savefig(os.path.join(args.output_dir, fname), dpi=fig1.dpi)
     
     m = nn.Sigmoid()
     if args.do_eval:
@@ -655,7 +660,7 @@ def main():
             label_ids = label_ids.to('cpu').numpy()
 
             outputs = np.asarray([1 if i else 0 for i in (logits.flatten()>=0.5)])
-            tmp_eval_accuracy=np.sum(outputs == label_ids)
+            tmp_eval_accuracy = np.sum(outputs == label_ids)
             
             true_labels = true_labels + label_ids.flatten().tolist()
             pred_labels = pred_labels + outputs.flatten().tolist()
@@ -671,14 +676,14 @@ def main():
         eval_accuracy = eval_accuracy / nb_eval_examples
         df = pd.DataFrame({'logits':logits_history, 'pred_label': pred_labels, 'label':true_labels})
         
-        string = 'logits_clinicalbert_'+args.readmission_mode+'_chunks.csv'
+        string = 'logits_clinicalbert_' + args.readmission_mode + '_chunks.csv'
         df.to_csv(os.path.join(args.output_dir, string))
         
         df_test = pd.read_csv(os.path.join(args.data_dir, "test.csv"))
 
         fpr, tpr, df_out = vote_score(df_test, logits_history, args)
         
-        string = 'logits_clinicalbert_'+args.readmission_mode+'_readmissions.csv'
+        string = 'logits_clinicalbert_' + args.readmission_mode + '_readmissions.csv'
         df_out.to_csv(os.path.join(args.output_dir,string))
         
         rp80 = vote_pr_curve(df_test, logits_history, args)
