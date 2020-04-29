@@ -32,7 +32,7 @@ import matplotlib.pyplot as plt
 from scipy import interp
 
 from sklearn.metrics import roc_auc_score, precision_recall_curve, roc_curve, auc, confusion_matrix, classification_report
-from sklearn.metrics import average_precision
+from sklearn.metrics import average_precision_score
 from sklearn.utils.fixes import signature
 import matplotlib.pyplot as plt
 
@@ -46,7 +46,9 @@ from torch import nn
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 from pytorch_pretrained_bert.optimization import BertAdam
 #important
-from modeling_readmission import BertForSequenceClassification
+#from modeling_readmission import BertForSequenceClassification
+
+from pytorch_pretrained_bert.modeling import BertForSequenceClassification
 
 logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s', 
                     datefmt = '%m/%d/%Y %H:%M:%S',
