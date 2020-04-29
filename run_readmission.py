@@ -32,6 +32,7 @@ import matplotlib.pyplot as plt
 from scipy import interp
 
 from sklearn.metrics import roc_auc_score, precision_recall_curve, roc_curve, auc, confusion_matrix, classification_report
+from sklearn.metrics import average_precision
 from sklearn.utils.fixes import signature
 import matplotlib.pyplot as plt
 
@@ -45,10 +46,7 @@ from torch import nn
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 from pytorch_pretrained_bert.optimization import BertAdam
 #important
-
-#from modeling_readmission import BertForSequenceClassification
-from pytorch_pretrained_bert import BertForSequenceClassification
-#from modeling_readmission import BertForSequenceClassification
+from modeling_readmission import BertForSequenceClassification
 
 logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s', 
                     datefmt = '%m/%d/%Y %H:%M:%S',
@@ -116,9 +114,10 @@ class DataProcessor(object):
     def _read_csv(cls, input_file):
         """Reads a comma separated value file."""
         file=pd.read_csv(input_file)
-        lines=zip(file.ID,file.TEXT,file.Label)
+        lines=zip(file.ID, file.TEXT, file.Label)
         return lines
 
+    
 class readmissionProcessor(DataProcessor):
     def get_train_examples(self, data_dir):
         logger.info("LOOKING AT {}".format(os.path.join(data_dir, "train.csv")))
@@ -127,7 +126,7 @@ class readmissionProcessor(DataProcessor):
     
     def get_dev_examples(self, data_dir):
         return self._create_examples(
-            self._read_csv(os.path.join(data_dir, "val.csv")), "val")
+            self._read_csv(os.path.join(data_dir, "dev.csv")), "dev")
     
     def get_test_examples(self, data_dir):
         return self._create_examples(
@@ -265,6 +264,7 @@ def accuracy(out, labels):
     outputs = np.argmax(out, axis=1)
     return np.sum(outputs == labels)
 
+
 def copy_optimizer_params_to_model(named_params_model, named_params_optimizer):
     """ Utility function for optimize_on_cpu and 16-bits training.
         Copy the parameters optimized on CPU/RAM back to the model on GPU
@@ -297,10 +297,10 @@ def set_optimizer_params_grad(named_params_optimizer, named_params_model, test_n
 
 def vote_score(df, score, args):
     df['pred_score'] = score
-    df_sort = df.sort_values(by=['ID'])
+    df_sort = df.sort_values(by=['ID']).groupby(['ID'])
     #score 
-    temp = (df_sort.groupby(['ID'])['pred_score'].agg(max)+df_sort.groupby(['ID'])['pred_score'].agg(sum)/2)/(1+df_sort.groupby(['ID'])['pred_score'].agg(len)/2)
-    x = df_sort.groupby(['ID'])['Label'].agg(np.min).values
+    temp = (df_sort['pred_score'].agg(max) + df_sort['pred_score'].agg(sum)/2) / (1 + df_sort['pred_score'].agg(len)/2)
+    x = df_sort['Label'].agg(np.min).values
     df_out = pd.DataFrame({'logits': temp.values, 'ID': x})
 
     fpr, tpr, thresholds = roc_curve(x, temp.values)
@@ -314,10 +314,11 @@ def vote_score(df, score, args):
     plt.title('ROC curve')
     plt.legend(loc='best')
     plt.show()
-    string = 'auroc_clinicalbert_'+args.readmission_mode+'.png'
+    string = 'auroc_clinicalbert_' + args.readmission_mode + '.png'
     plt.savefig(os.path.join(args.output_dir, string))
 
     return fpr, tpr, df_out
+
 
 def pr_curve_plot(y, y_score, args):
     precision, recall, _ = precision_recall_curve(y, y_score)
@@ -327,33 +328,32 @@ def pr_curve_plot(y, y_score, args):
                    else {})
     
     plt.figure(2)
-    plt.step(recall, precision, color='b', alpha=0.2,
-             where='post')
+    plt.step(recall, precision, color='b', alpha=0.2, where='post')
     plt.fill_between(recall, precision, alpha=0.2, color='b', **step_kwargs)
     plt.xlabel('Recall')
     plt.ylabel('Precision')
     plt.ylim([0.0, 1.05])
     plt.xlim([0.0, 1.0])
-    plt.title('Precision-Recall curve: AUC={0:0.2f}'.format(
-              area))
+    plt.title('Precision-Recall curve: AUC={0:0.2f}'.format( area))
     
-    string = 'auprc_clinicalbert_'+args.readmission_mode+'.png'
+    string = 'auprc_clinicalbert_' + args.readmission_mode + '.png'
 
     plt.savefig(os.path.join(args.output_dir, string))
+    return area
 
 
 def vote_pr_curve(df, score, args):
     df['pred_score'] = score
-    df_sort = df.sort_values(by=['ID'])
+    df_sort = df.sort_values(by=['ID']).groupby(['ID'])
     #score 
-    temp = (df_sort.groupby(['ID'])['pred_score'].agg(max)+df_sort.groupby(['ID'])['pred_score'].agg(sum)/2)/(1+df_sort.groupby(['ID'])['pred_score'].agg(len)/2)
-    y = df_sort.groupby(['ID'])['Label'].agg(np.min).values
+    temp = (df_sort['pred_score'].agg(max) + df_sort['pred_score'].agg(sum)/2) / (1+df_sort['pred_score'].agg(len)/2)
+    y = df_sort['Label'].agg(np.min).values
     
     precision, recall, thres = precision_recall_curve(y, temp)
     pr_thres = pd.DataFrame(data =  list(zip(precision, recall, thres)), columns = ['prec','recall','thres'])
     vote_df = pd.DataFrame(data =  list(zip(temp, y)), columns = ['score','label'])
     
-    pr_curve_plot(y, temp, args)
+    auprc = pr_curve_plot(y, temp, args)
     
     temp = pr_thres[pr_thres.prec > 0.799999].reset_index()
     
@@ -362,9 +362,8 @@ def vote_pr_curve(df, score, args):
         print('Test Sample too small or RP80=0')
     else:
         rp80 = temp.iloc[0].recall
-        print(f'Recall at Precision of 80 is {rp80}')
 
-    return rp80
+    return rp80, auprc
 
 
 def main():
@@ -513,7 +512,7 @@ def main():
             len(train_examples) / args.train_batch_size / args.gradient_accumulation_steps * args.num_train_epochs)
 
     # Prepare model
-    model = BertForSequenceClassification.from_pretrained(args.bert_model, num_labels=1)
+    model = BertForSequenceClassification.from_pretrained(args.bert_model, 1)
     if args.fp16:
         model.half()
     model.to(device)
@@ -545,9 +544,9 @@ def main():
 
     global_step = 0
     train_loss = 100000
-    number_training_steps=1
-    global_step_check=0
-    train_loss_history=[]
+    number_training_steps = 1
+    global_step_check = 0
+    train_loss_history = []
     if args.do_train:
         train_features = convert_examples_to_features(
             train_examples, label_list, args.max_seq_length, tokenizer)
@@ -607,25 +606,23 @@ def main():
                     global_step += 1
                 
                 if (step+1) % 200 == 0:
-                    if step+1 == 200:
-                        print()
-                    logger.info(f'step {step+1}')
+                    string = 'step '+str(step+1)
+                    print (string)
 
             train_loss=tr_loss
             global_step_check=global_step
             number_training_steps=nb_tr_steps
             
-        fname = 'pytorch_model.bin'
-        torch.save(model.state_dict(), os.path.join(args.output_dir, fname))
+        string = './pytorch_model_new_'+args.readmission_mode+'.bin'
+        torch.save(model.state_dict(), string)
 
         fig1 = plt.figure()
         plt.plot(train_loss_history)
-        fname = 'loss_history.png'
-        fig1.savefig(os.path.join(args.output_dir, fname), dpi=fig1.dpi)
+        fig1.savefig('loss_history.png', dpi=fig1.dpi)
     
     m = nn.Sigmoid()
     if args.do_eval:
-        eval_examples = processor.get_test_examples(args.data_dir)
+        eval_examples = processor.get_dev_examples(args.data_dir)
         eval_features = convert_examples_to_features(
             eval_examples, label_list, args.max_seq_length, tokenizer)
         logger.info("***** Running evaluation *****")
@@ -644,9 +641,9 @@ def main():
         model.eval()
         eval_loss, eval_accuracy = 0, 0
         nb_eval_steps, nb_eval_examples = 0, 0
-        true_labels=[]
-        pred_labels=[]
-        logits_history=[]
+        true_labels = []
+        pred_labels = []
+        logits_history = []
         for input_ids, input_mask, segment_ids, label_ids in tqdm(eval_dataloader):
             input_ids = input_ids.to(device)
             input_mask = input_mask.to(device)
@@ -659,7 +656,7 @@ def main():
             logits = torch.squeeze(m(logits)).detach().cpu().numpy()
             label_ids = label_ids.to('cpu').numpy()
 
-            outputs = np.asarray([1 if i else 0 for i in (logits.flatten()>=0.5)])
+            outputs = np.asarray([1 if i else 0 for i in (logits.flatten() >= 0.5)])
             tmp_eval_accuracy = np.sum(outputs == label_ids)
             
             true_labels = true_labels + label_ids.flatten().tolist()
@@ -674,25 +671,33 @@ def main():
             
         eval_loss = eval_loss / nb_eval_steps
         eval_accuracy = eval_accuracy / nb_eval_examples
+        eval_auroc = roc_auc_score(true_labels, logits_history)
+        eval_auprc = average_precision(true_labels, logits_history)
+        
         df = pd.DataFrame({'logits':logits_history, 'pred_label': pred_labels, 'label':true_labels})
         
         string = 'logits_clinicalbert_' + args.readmission_mode + '_chunks.csv'
         df.to_csv(os.path.join(args.output_dir, string))
         
-        df_test = pd.read_csv(os.path.join(args.data_dir, "test.csv"))
+        df_test = pd.read_csv(os.path.join(args.data_dir, "dev.csv"))
 
         fpr, tpr, df_out = vote_score(df_test, logits_history, args)
         
         string = 'logits_clinicalbert_' + args.readmission_mode + '_readmissions.csv'
-        df_out.to_csv(os.path.join(args.output_dir,string))
+        df_out.to_csv(os.path.join(args.output_dir, string))
         
-        rp80 = vote_pr_curve(df_test, logits_history, args)
+        eval_rep80_voted, eval_auprc_voted = vote_pr_curve(df_test, logits_history, args)
         
-        result = {'eval_loss': eval_loss,
-                  'eval_accuracy': eval_accuracy,                 
-                  'global_step': global_step_check,
-                  'training loss': train_loss/number_training_steps,
-                  'RP80': rp80}
+        result = {
+            '_global_step': global_step_check,
+            '_training_loss': train_loss / number_training_steps,
+            'eval_loss': eval_loss,
+            'eval_accuracy': eval_accuracy,    
+            'eval_auroc': eval_auroc,
+            'eval_auprc': eval_auprc,
+            'eval_auprc_voted': eval_auprc_voted,
+            'eval_rep80_voted': eval_rep80_voted,
+        }
         
         output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
         with open(output_eval_file, "w") as writer:
@@ -700,7 +705,6 @@ def main():
             for key in sorted(result.keys()):
                 logger.info("  %s = %s", key, str(result[key]))
                 writer.write("%s = %s\n" % (key, str(result[key])))
-                
                       
         
 if __name__ == "__main__":
