@@ -319,7 +319,7 @@ def vote_score(df, score, args):
     string = 'auroc_clinicalbert_' + args.readmission_mode + '.png'
     plt.savefig(os.path.join(args.output_dir, string))
 
-    return fpr, tpr, df_out
+    return fpr, tpr, df_out, auc_score
 
 
 def pr_curve_plot(y, y_score, args):
@@ -514,7 +514,7 @@ def main():
             len(train_examples) / args.train_batch_size / args.gradient_accumulation_steps * args.num_train_epochs)
 
     # Prepare model
-    model = BertForSequenceClassification.from_pretrained(args.bert_model, 1)
+    model = BertForSequenceClassification.from_pretrained(args.bert_model, num_labels=1)
     if args.fp16:
         model.half()
     model.to(device)
@@ -674,7 +674,7 @@ def main():
         eval_loss = eval_loss / nb_eval_steps
         eval_accuracy = eval_accuracy / nb_eval_examples
         eval_auroc = roc_auc_score(true_labels, logits_history)
-        eval_auprc = average_precision(true_labels, logits_history)
+        eval_auprc = average_precision_score(true_labels, logits_history)
         
         df = pd.DataFrame({'logits':logits_history, 'pred_label': pred_labels, 'label':true_labels})
         
@@ -683,7 +683,7 @@ def main():
         
         df_test = pd.read_csv(os.path.join(args.data_dir, "dev.csv"))
 
-        fpr, tpr, df_out = vote_score(df_test, logits_history, args)
+        fpr, tpr, df_out, eval_auroc_voted = vote_score(df_test, logits_history, args)
         
         string = 'logits_clinicalbert_' + args.readmission_mode + '_readmissions.csv'
         df_out.to_csv(os.path.join(args.output_dir, string))
@@ -696,6 +696,7 @@ def main():
             'eval_loss': eval_loss,
             'eval_accuracy': eval_accuracy,    
             'eval_auroc': eval_auroc,
+            'eval_auroc_voted': eval_auroc_voted,
             'eval_auprc': eval_auprc,
             'eval_auprc_voted': eval_auprc_voted,
             'eval_rep80_voted': eval_rep80_voted,
